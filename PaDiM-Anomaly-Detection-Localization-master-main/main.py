@@ -6,7 +6,7 @@ import os
 import pickle
 from tqdm import tqdm
 from collections import OrderedDict
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, average_precision_score
 from sklearn.metrics import roc_curve
 from sklearn.metrics import precision_recall_curve
 from sklearn.covariance import LedoitWolf
@@ -16,6 +16,7 @@ from skimage import morphology
 from skimage.segmentation import mark_boundaries
 import matplotlib.pyplot as plt
 import matplotlib
+from metrics import compute_pro_torch,compute_pro
 from torchvision import models
 import torch
 import torch.nn.functional as F
@@ -200,7 +201,7 @@ def main():
 
         # upsample
         dist_list = torch.tensor(dist_list)
-        score_map = F.interpolate(dist_list.unsqueeze(1), size=x.size(2), mode='bilinear',
+        score_map = F.interpolate(dist_list.unsqueeze(1), size=x.size(2), mode='bicubic',
                                   align_corners=False).squeeze().numpy()
 
         # apply gaussian smoothing on the score map
@@ -218,7 +219,8 @@ def main():
         fpr, tpr, _ = roc_curve(gt_list, img_scores)
         img_roc_auc = roc_auc_score(gt_list, img_scores)
         total_roc_auc.append(img_roc_auc)
-        print('image ROCAUC: %.3f' % (img_roc_auc))
+        img_ap = average_precision_score(gt_list, img_scores)
+        print('{} image ROCAUC: {:.3f},image AP: {:.3f}'.format(class_name, img_roc_auc,img_ap))
         fig_img_rocauc.plot(fpr, tpr, label='%s img_ROCAUC: %.3f' % (class_name, img_roc_auc))
 
         # get optimal threshold
@@ -228,12 +230,14 @@ def main():
         b = precision + recall
         f1 = np.divide(a, b, out=np.zeros_like(a), where=b != 0)
         threshold = thresholds[np.argmax(f1)]
-
         # calculate per-pixel level ROCAUC
         fpr, tpr, _ = roc_curve(gt_mask.flatten(), scores.flatten())
         per_pixel_rocauc = roc_auc_score(gt_mask.flatten(), scores.flatten())
         total_pixel_roc_auc.append(per_pixel_rocauc)
-        print('pixel ROCAUC: %.3f' % (per_pixel_rocauc))
+        pixel_ap = average_precision_score(gt_mask.flatten(), scores.flatten())
+        pixel_pro=compute_pro(gt_mask, scores)
+        print('{} pixel ROCAUC: {:.3f}，pixel AP: {:.3f},pixel pro: {:.3f}'.format(class_name, per_pixel_rocauc,pixel_ap,pixel_pro))
+        fig_pixel_rocauc.plot(fpr, tpr, label='%s pixel_ROCAUC: %.3f' % (class_name, per_pixel_rocauc))
 
         fig_pixel_rocauc.plot(fpr, tpr, label='%s ROCAUC: %.3f' % (class_name, per_pixel_rocauc))
         save_dir = args.save_path + '/' + f'pictures_{args.arch}'
@@ -310,7 +314,6 @@ def denormalization(x):
     mean = np.array([0.485, 0.456, 0.406])
     std = np.array([0.229, 0.224, 0.225])
     x = (((x.transpose(1, 2, 0) * std) + mean) * 255.).astype(np.uint8)
-
     return x
 
 
@@ -328,7 +331,7 @@ def embedding_concat(x, y):
     return z
 
 def embedding_concat_upsample(x, y):
-    y=F.interpolate(y, size=(56, 56), mode='bilinear', align_corners=False)
+    y=F.interpolate(y, size=(56, 56), mode='bicubic', align_corners=False)
     result = torch.cat((x, y), dim=1)
     return result
 
